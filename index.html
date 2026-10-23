@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Bench Drift Checker</title>
+<meta name="description" content="Controller stick drift, reach, circularity and return-to-center tester for repair benches. Runs in Chrome or Edge using the Gamepad API.">
+<meta name="theme-color" content="#d9730d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='none' stroke='%23d9730d' stroke-width='6'/%3E%3Ccircle cx='32' cy='24' r='8' fill='%232b6cb0'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>*,*::before,*::after{box-sizing:border-box}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<style>
+/* Layout: bench instrument — live stick scopes with tests on top, a fixed-look customer results card to screenshot below, ticket notes last */
+:root{
+  --bg:#eef1f4; --panel:#ffffff; --ink:#18212b; --muted:#5b6774; --line:#d3d9e0;
+  --accent:#d9730d; --trace:#2b6cb0;
+  --good:#1f8a4c; --warn:#b7791f; --bad:#c53030;
+  --good-bg:#e3f4ea; --warn-bg:#fbf0d9; --bad-bg:#fbe3e3;
+  --display:"Archivo",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  /* Customer card keeps one light look so screenshots match every time */
+  --c-bg:#ffffff; --c-ink:#18212b; --c-muted:#5b6774; --c-line:#dfe4ea; --c-soft:#f3f5f8;
+  --c-accent:#d9730d; --c-good:#1f8a4c; --c-warn:#a8690f; --c-bad:#c53030;
+  --c-good-bg:#e3f4ea; --c-warn-bg:#fbf0d9; --c-bad-bg:#fbe3e3;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12171d; --panel:#1b222b; --ink:#e6ebf0; --muted:#94a1ae; --line:#2e3844;
+  --accent:#f0954a; --trace:#6ca8e8;
+  --good:#53c587; --warn:#e3b04b; --bad:#f07575;
+  --good-bg:#183326; --warn-bg:#352b14; --bad-bg:#3a1c1c; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12171d; --panel:#1b222b; --ink:#e6ebf0; --muted:#94a1ae; --line:#2e3844;
+  --accent:#f0954a; --trace:#6ca8e8;
+  --good:#53c587; --warn:#e3b04b; --bad:#f07575;
+  --good-bg:#183326; --warn-bg:#352b14; --bad-bg:#3a1c1c; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--display);
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 40px}
+.wrap{max-width:1040px;margin:0 auto;display:grid;gap:18px}
+header{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px}
+h1{font-size:1.7rem;font-weight:800;letter-spacing:-.01em;margin:0;text-wrap:balance}
+h2.sec{font-size:.8rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin:10px 0 -6px}
+.sub{color:var(--muted);margin:2px 0 0;font-size:.92rem}
+.device{font-family:var(--mono);font-size:.8rem;color:var(--muted);display:flex;align-items:center;gap:8px;min-width:0}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
+.dot.on{background:var(--good)} .dot.demo{background:var(--accent)}
+.device span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:60vw}
+.notice{background:var(--panel);border:1px dashed var(--accent);border-radius:8px;padding:10px 14px;font-size:.9rem}
+.sticks{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px}
+.stick{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;display:grid;gap:12px;min-width:0}
+.stick-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.stick h3{margin:0;font-size:1.05rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.pill{font-family:var(--mono);font-size:.75rem;font-weight:600;padding:3px 10px;border-radius:99px;background:var(--line);color:var(--ink);white-space:nowrap}
+.pill.good{background:var(--good-bg);color:var(--good)} .pill.warn{background:var(--warn-bg);color:var(--warn)} .pill.bad{background:var(--bad-bg);color:var(--bad)}
+canvas.scope{width:100%;max-width:300px;aspect-ratio:1;display:block;margin:0 auto}
+.readout{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.cell{border-top:2px solid var(--line);padding-top:6px;min-width:0}
+.cell b{display:block;font-size:.68rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.cell output{font-family:var(--mono);font-size:1.05rem;font-variant-numeric:tabular-nums}
+.tests{display:grid;gap:8px}
+.test{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.test>div{min-width:0;flex:1}
+.test .lbl{font-size:.88rem;font-weight:600}
+.test .res{font-family:var(--mono);font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.reach{display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;align-items:center;font-family:var(--mono);font-size:.76rem;margin-top:4px}
+.bar{height:7px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--trace)}
+button{font:600 .82rem var(--display);border:1px solid var(--accent);color:var(--accent);background:transparent;border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{background:var(--accent);color:var(--panel)}
+button:focus-visible,input:focus-visible{outline:2px solid var(--trace);outline-offset:2px}
+button.primary{background:var(--accent);color:var(--panel)}
+.extras,.report,.cardtools{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:grid;gap:12px}
+.extras h4,.report h4{margin:0;font-size:.8rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.trig{display:grid;grid-template-columns:auto 1fr auto;gap:8px 10px;align-items:center;font-family:var(--mono);font-size:.8rem}
+.btns{display:flex;flex-wrap:wrap;gap:6px}
+.btns span{font-family:var(--mono);font-size:.72rem;border:1px solid var(--line);border-radius:5px;padding:3px 7px;color:var(--muted)}
+.btns span.on{background:var(--trace);border-color:var(--trace);color:var(--panel)}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.fields label{display:grid;gap:4px;font-size:.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.fields input{font:15px var(--display);padding:7px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);min-width:0}
+.toolrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.toolrow .hint{color:var(--muted);font-size:.85rem}
+.report-head{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+textarea{width:100%;min-height:130px;font:13px/1.5 var(--mono);background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:10px;resize:vertical}
+
+/* ---------- Customer card (screenshot this) ---------- */
+.cardwrap{overflow-x:auto}
+.card{background:var(--c-bg);color:var(--c-ink);border:1px solid var(--c-line);border-radius:14px;max-width:720px;margin:0 auto;padding:22px 24px;display:grid;gap:18px;box-shadow:0 2px 14px rgba(24,33,43,.08)}
+.card-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;border-bottom:2px solid var(--c-ink);padding-bottom:12px}
+.card-top .biz{font-weight:800;font-size:1.25rem;letter-spacing:-.01em}
+.card-top .doc{font-size:.72rem;text-transform:uppercase;letter-spacing:.14em;color:var(--c-accent);font-weight:700}
+.card-top .meta{font-family:var(--mono);font-size:.78rem;color:var(--c-muted);text-align:right;line-height:1.6}
+.cstick{display:grid;gap:10px}
+.cstick-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.cstick-head h5{margin:0;font-size:1rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+.verdict{font-size:.78rem;font-weight:700;padding:4px 12px;border-radius:99px;background:var(--c-soft);color:var(--c-muted)}
+.verdict.good{background:var(--c-good-bg);color:var(--c-good)} .verdict.warn{background:var(--c-warn-bg);color:var(--c-warn)} .verdict.bad{background:var(--c-bad-bg);color:var(--c-bad)}
+.cbody{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:start}
+.plots{display:flex;gap:10px}
+.plots figure{margin:0;display:grid;gap:2px;justify-items:center}
+.plots figcaption{font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;color:var(--c-muted);font-weight:700}
+.plots canvas{width:118px;height:118px}
+table.metrics{width:100%;border-collapse:collapse;font-size:.86rem}
+table.metrics th{font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;color:var(--c-muted);text-align:left;font-weight:700;padding:0 6px 4px}
+table.metrics td{padding:5px 6px;border-top:1px solid var(--c-line);font-variant-numeric:tabular-nums;vertical-align:middle}
+table.metrics td.v{font-family:var(--mono);font-size:.82rem;white-space:nowrap}
+.tag{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle;background:var(--c-line)}
+.tag.good{background:var(--c-good)} .tag.warn{background:var(--c-warn)} .tag.bad{background:var(--c-bad)}
+.mini{display:inline-block;width:52px;height:6px;background:var(--c-soft);border-radius:3px;margin-left:6px;vertical-align:middle;overflow:hidden}
+.mini i{display:block;height:100%}
+.card-foot{border-top:1px solid var(--c-line);padding-top:10px;font-size:.76rem;color:var(--c-muted);display:grid;gap:4px}
+.card-foot b{color:var(--c-ink)}
+.na{color:var(--c-muted)}
+@media (max-width:560px){.cbody{grid-template-columns:1fr}.plots{justify-content:center}.card{padding:16px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Bench Drift Checker</h1>
+      <p class="sub">Connect the controller, press any button, then run the four tests on each stick.</p>
+    </div>
+    <div class="device"><i class="dot" id="dot"></i><span id="devName">Waiting for controller…</span></div>
+  </header>
+
+  <div class="notice" id="notice">Showing a <b>demo controller</b> with upward drift on the left stick. Press any button on a real controller to switch over.</div>
+
+  <div class="sticks" id="sticks"></div>
+
+  <div class="extras">
+    <h4>Triggers &amp; buttons</h4>
+    <div class="trig">
+      <span>LT</span><div class="bar"><i id="lt"></i></div><output id="ltv">0.00</output>
+      <span>RT</span><div class="bar"><i id="rt"></i></div><output id="rtv">0.00</output>
+    </div>
+    <div class="btns" id="btns"></div>
+  </div>
+
+  <h2 class="sec">Customer results card</h2>
+  <div class="cardtools">
+    <div class="fields">
+      <label for="fCust">Customer<input id="fCust" placeholder="e.g. Jordan"></label>
+      <label for="fTicket">Ticket #<input id="fTicket" placeholder="e.g. 1035"></label>
+      <label for="fModel">Controller<input id="fModel" placeholder="e.g. SCUF Instinct (wireless)"></label>
+    </div>
+    <div class="toolrow">
+      <button id="markBefore">Save as “Before repair”</button>
+      <button id="clearBefore">Clear “Before”</button>
+      <span class="hint" id="beforeHint">Run the tests, save as Before, repair, run them again. The card shows both side by side.</span>
+    </div>
+  </div>
+  <div class="cardwrap">
+    <article class="card" id="card" aria-label="Customer results card"></article>
+  </div>
+
+  <div class="report">
+    <div class="report-head">
+      <h4>Ticket notes</h4>
+      <button class="primary" id="copy">Copy notes</button>
+    </div>
+    <textarea id="report" readonly aria-label="Ticket notes"></textarea>
+  </div>
+</div>
+
+<script>
+(function(){
+const BIZ="TSTSI Endeavors";
+const BTN_NAMES=["A","B","X","Y","LB","RB","LT","RT","View","Menu","LS","RS","Up","Down","Left","Right","Xbox"];
+const SIDES=[{key:"L",name:"Left stick",ax:0,ay:1},{key:"R",name:"Right stick",ax:2,ay:3}];
+const DIRS=["up","down","left","right"];
+const $=id=>document.getElementById(id);
+const S={};
+const sticksEl=$("sticks");
+SIDES.forEach(s=>{
+  const el=document.createElement("section");el.className="stick";
+  el.innerHTML=`<div class="stick-head"><h3>${s.name}</h3><span class="pill" id="pill${s.key}">—</span></div>
+  <canvas class="scope" id="cv${s.key}" width="300" height="300" aria-label="${s.name} position plot"></canvas>
+  <div class="readout">
+    <div class="cell"><b>X</b><output id="x${s.key}">0.000</output></div>
+    <div class="cell"><b>Y</b><output id="y${s.key}">0.000</output></div>
+    <div class="cell"><b>Distance</b><output id="r${s.key}">0.000</output></div>
+  </div>
+  <div class="tests">
+    <div class="test"><div><div class="lbl">1 · Rest drift</div><div class="res" id="restRes${s.key}">Hands off for 3 seconds</div></div><button id="restBtn${s.key}">Run</button></div>
+    <div class="test"><div><div class="lbl">2 · Reach</div><div class="res">Push fully up, down, left, right</div>
+      <div class="reach">${DIRS.map(d=>`<span>${d[0].toUpperCase()+d.slice(1)}</span><div class="bar"><i id="rb${s.key}${d}"></i></div><output id="rv${s.key}${d}">—</output>`).join("")}</div></div>
+      <button id="reachBtn${s.key}">Reset</button></div>
+    <div class="test"><div><div class="lbl">3 · Circle accuracy</div><div class="res" id="circRes${s.key}">Roll the stick around the edge</div></div><button id="circBtn${s.key}">Run</button></div>
+    <div class="test"><div><div class="lbl">4 · Return to center</div><div class="res" id="relRes${s.key}">Push to the edge, let go</div></div><button id="relBtn${s.key}">Clear</button></div>
+  </div>`;
+  sticksEl.appendChild(el);
+  S[s.key]={...s,x:0,y:0,trail:[],rest:null,restRun:null,circ:null,circRun:null,bins:null,
+    reach:{up:0,down:0,left:0,right:0},rel:[],edgeAt:0,releasing:null};
+});
+
+const fmt=v=>(v>=0?"+":"")+v.toFixed(3);
+const pct=v=>Math.round(Math.min(1,v)*100)+"%";
+const rank=v=>({good:0,warn:1,bad:2})[v];
+const rateRest=r=>r<=0.05?"good":r<=0.10?"warn":"bad";
+const rateReach=v=>v>=0.95?"good":v>=0.85?"warn":"bad";
+const rateCirc=e=>e<=10?"good":e<=15?"warn":"bad";
+const rateRel=ms=>ms==null?"bad":ms<=150?"good":ms<=400?"warn":"bad";
+const word={good:"Good",warn:"Watch",bad:"Problem"};
+const verdictWord={good:"Working normally",warn:"Needs attention",bad:"Needs repair"};
+let demo=true,padIndex=null,padName="",before=null,apiBlocked=false;
+
+const btnsEl=$("btns");
+BTN_NAMES.forEach((n,i)=>{const s=document.createElement("span");s.id="b"+i;s.textContent=n;btnsEl.appendChild(s)});
+
+SIDES.forEach(s=>{const st=S[s.key];
+  $("restBtn"+s.key).onclick=()=>{st.restRun={t0:performance.now(),xs:[],ys:[],max:0};$("restRes"+s.key).textContent="Recording… keep hands off";};
+  $("reachBtn"+s.key).onclick=()=>{st.reach={up:0,down:0,left:0,right:0};};
+  $("circBtn"+s.key).onclick=()=>{st.circRun={t0:performance.now()};st.bins=new Array(72).fill(0);$("circRes"+s.key).textContent="Roll slowly around the edge 2–3 times…";};
+  $("relBtn"+s.key).onclick=()=>{st.rel=[];$("relRes"+s.key).textContent="Push to the edge, let go";};
+});
+
+function readPad(){
+  if(apiBlocked||!navigator.getGamepads)return null;
+  let pads;try{pads=navigator.getGamepads();}catch(e){apiBlocked=true;$("notice").innerHTML="This browser view can’t read controllers, so the demo is showing. Open this page in Chrome or Edge on the bench PC.";return null;}
+  if(padIndex!=null&&pads[padIndex])return pads[padIndex];
+  for(const p of pads){if(p&&p.connected){padIndex=p.index;return p;}}
+  return null;
+}
+function demoInput(t){
+  const T=t/1000,n=()=>(Math.random()-.5)*0.01;
+  // Left: rests leaning up, and only reaches ~82% when pushed up
+  const ph=T%10;let lx=0.01+n(),ly=-0.12+n();
+  if(ph>4&&ph<9){const a=T*1.4;lx=Math.cos(a)*0.97;ly=Math.sin(a)*0.97;if(ly<-0.82)ly=-0.82;}
+  // Right: healthy
+  const p2=T%8;let rx=n(),ry=n();
+  if(p2<5){const a=T*1.6,k=Math.min(1,p2);rx=Math.cos(a)*k*0.98;ry=Math.sin(a)*k*0.98;}
+  return{axes:[lx,ly,rx,ry],buttons:[],lt:(Math.sin(T)+1)/2*0.6,rt:0};
+}
+
+let lastCard=0;
+function frame(t){
+  const pad=readPad();let input;
+  if(pad){if(demo){demo=false;$("notice").hidden=true;resetAll();}
+    padName=pad.id;$("devName").textContent=pad.id;$("dot").className="dot on";
+    input={axes:pad.axes,buttons:pad.buttons,lt:pad.buttons[6]?pad.buttons[6].value:0,rt:pad.buttons[7]?pad.buttons[7].value:0};}
+  else{if(!demo){demo=true;$("notice").hidden=false;padIndex=null;}
+    $("devName").textContent=apiBlocked?"Controller access blocked":"Demo controller";$("dot").className="dot demo";input=demoInput(t);}
+  const cs=getComputedStyle(document.documentElement);const C={};
+  ["ink","muted","line","accent","trace","good","warn","bad"].forEach(k=>C[k]=cs.getPropertyValue("--"+k).trim());
+  SIDES.forEach(s=>updateStick(S[s.key],input.axes[s.ax]||0,input.axes[s.ay]||0,t,C));
+  $("lt").style.width=(input.lt*100)+"%";$("ltv").textContent=input.lt.toFixed(2);
+  $("rt").style.width=(input.rt*100)+"%";$("rtv").textContent=input.rt.toFixed(2);
+  BTN_NAMES.forEach((n,i)=>{const b=input.buttons[i];$("b"+i).classList.toggle("on",!!(b&&b.pressed));});
+  if(t-lastCard>300){lastCard=t;renderCard();updateReport();}
+  requestAnimationFrame(frame);
+}
+
+function updateStick(st,x,y,t,C){
+  st.x=x;st.y=y;const r=Math.hypot(x,y),k=st.key;
+  $("x"+k).textContent=fmt(x);$("y"+k).textContent=fmt(y);$("r"+k).textContent=r.toFixed(3);
+  st.trail.push([x,y]);if(st.trail.length>60)st.trail.shift();
+  // Reach
+  st.reach.up=Math.max(st.reach.up,-y);st.reach.down=Math.max(st.reach.down,y);
+  st.reach.left=Math.max(st.reach.left,-x);st.reach.right=Math.max(st.reach.right,x);
+  DIRS.forEach(d=>{const v=st.reach[d];$("rb"+k+d).style.width=Math.min(100,v*100)+"%";
+    $("rb"+k+d).style.background=v<0.5?C.trace:C[rateReach(v)];$("rv"+k+d).textContent=v>0.05?pct(v):"—";});
+  // Rest
+  if(st.restRun){const R=st.restRun;R.xs.push(x);R.ys.push(y);R.max=Math.max(R.max,r);
+    if(t-R.t0>3000){const ax=avg(R.xs),ay=avg(R.ys);st.rest={x:ax,y:ay,max:R.max};st.restRun=null;
+      const v=rateRest(R.max);$("restRes"+k).innerHTML=`${pct(R.max)} off center${R.max>0.05?" · leans "+lean(ax,ay):""} <b style="color:var(--${v})">${word[v]}</b>`;}}
+  // Circle
+  if(st.circRun){if(r>0.5){const a=(Math.atan2(y,x)+Math.PI*2)%(Math.PI*2);const bi=Math.floor(a/(Math.PI*2)*72)%72;st.bins[bi]=Math.max(st.bins[bi],r);}
+    const filled=st.bins.filter(v=>v>0);
+    if(filled.length>=68||t-st.circRun.t0>12000){
+      if(filled.length<50)$("circRes"+k).textContent="Not enough coverage. Run again and roll all the way around.";
+      else{const err=filled.reduce((a,v)=>a+Math.abs(v-1),0)/filled.length*100;st.circ={err};const v=rateCirc(err);
+        $("circRes"+k).innerHTML=`${Math.round(100-err)}% accurate <b style="color:var(--${v})">${word[v]}</b>`;}
+      st.circRun=null;}
+    else $("circRes"+k).textContent=`Rolling… ${Math.round(filled.length/72*100)}% covered`;}
+  // Return to center
+  if(r>0.9){st.edgeAt=t;st.releasing=null;}
+  else if(st.edgeAt&&!st.releasing&&t-st.edgeAt<60){st.releasing={t0:t};}
+  if(st.releasing){
+    if(r<0.1){pushRel(st,t-st.releasing.t0);}
+    else if(t-st.releasing.t0>800){pushRel(st,null);}
+  }
+  const pill=$("pill"+k);const w=worstOf(snap(st));const live=r<0.3?rateRest(r):null;const show=w||live;
+  pill.className="pill "+(show||"");pill.textContent=w?word[w]:(live?"At rest: "+word[live]:"Moving");
+  drawScope(st,C);
+}
+const avg=a=>a.reduce((p,c)=>p+c,0)/a.length;
+const lean=(x,y)=>Math.abs(y)>Math.abs(x)?(y<0?"up":"down"):(x<0?"left":"right");
+function pushRel(st,ms){st.rel.push(ms);if(st.rel.length>5)st.rel.shift();st.releasing=null;st.edgeAt=0;
+  const v=relRate(st.rel);$("relRes"+st.key).innerHTML=`Last ${st.rel.length}: ${st.rel.map(m=>m==null?"stuck":Math.round(m)+"ms").join(", ")} <b style="color:var(--${v})">${word[v]}</b>`;}
+function relRate(list){if(!list.length)return null;let w="good";list.forEach(ms=>{const v=rateRel(ms);if(rank(v)>rank(w))w=v;});return w;}
+
+function snap(st){
+  const touched=DIRS.some(d=>st.reach[d]>0.5);
+  return{rest:st.rest?{...st.rest}:null,reach:touched?{...st.reach}:null,circ:st.circ?{...st.circ}:null,
+    rel:st.rel.length?st.rel.slice():null,bins:st.bins?st.bins.slice():null};
+}
+function ratings(sn){
+  const o={};
+  if(sn.rest)o.rest=rateRest(sn.rest.max);
+  if(sn.reach){let w="good";DIRS.forEach(d=>{const v=rateReach(sn.reach[d]);if(rank(v)>rank(w))w=v;});o.reach=w;}
+  if(sn.circ)o.circ=rateCirc(sn.circ.err);
+  if(sn.rel)o.rel=relRate(sn.rel);
+  return o;
+}
+function worstOf(sn){const r=ratings(sn);let w=null;Object.values(r).forEach(v=>{if(v&&(!w||rank(v)>rank(w)))w=v;});return w;}
+
+function drawScope(st,C){
+  const cv=$("cv"+st.key);const dpr=window.devicePixelRatio||1;const w=cv.clientWidth||280;
+  if(cv.width!==Math.round(w*dpr)){cv.width=Math.round(w*dpr);cv.height=Math.round(w*dpr);}
+  const g=cv.getContext("2d");g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,w);
+  plotBase(g,w,C.line,C.good,C.warn);
+  const c=w/2,R=w/2-14;
+  if(st.bins)plotBins(g,st.bins,c,R,C.accent);
+  g.strokeStyle=C.trace;g.lineWidth=1.5;g.globalAlpha=.45;g.beginPath();
+  st.trail.forEach(([x,y],i)=>{const px=c+x*R,py=c+y*R;i?g.lineTo(px,py):g.moveTo(px,py);});g.stroke();g.globalAlpha=1;
+  const r=Math.hypot(st.x,st.y);g.fillStyle=r<0.3?C[rateRest(r)]:C.trace;
+  g.beginPath();g.arc(c+st.x*R,c+st.y*R,6,0,Math.PI*2);g.fill();
+  g.fillStyle=C.muted;g.font="600 10px IBM Plex Mono, monospace";g.textAlign="center";g.fillText("UP",c,10);
+}
+function plotBase(g,w,line,good,warn){
+  const c=w/2,R=w/2-14;g.lineWidth=1;g.strokeStyle=line;
+  g.beginPath();g.arc(c,c,R,0,Math.PI*2);g.stroke();
+  g.setLineDash([3,4]);g.beginPath();g.arc(c,c,R*0.5,0,Math.PI*2);g.stroke();g.setLineDash([]);
+  g.beginPath();g.moveTo(c-R,c);g.lineTo(c+R,c);g.moveTo(c,c-R);g.lineTo(c,c+R);g.stroke();
+  g.fillStyle=warn;g.globalAlpha=.14;g.beginPath();g.arc(c,c,R*0.10,0,Math.PI*2);g.fill();
+  g.fillStyle=good;g.globalAlpha=.22;g.beginPath();g.arc(c,c,R*0.05,0,Math.PI*2);g.fill();g.globalAlpha=1;
+}
+function plotBins(g,bins,c,R,color){
+  g.strokeStyle=color;g.lineWidth=2;g.beginPath();let first=true;
+  for(let i=0;i<=72;i++){const v=bins[i%72];if(!v){first=true;continue;}const a=(i+.5)/72*Math.PI*2;
+    const px=c+Math.cos(a)*v*R,py=c+Math.sin(a)*v*R;first?g.moveTo(px,py):g.lineTo(px,py);first=false;}
+  g.stroke();
+}
+function plotReach(g,reach,c,R,color){
+  g.strokeStyle=color;g.lineWidth=2;g.setLineDash([4,3]);g.beginPath();
+  g.moveTo(c,c-reach.up*R);g.lineTo(c+reach.right*R,c);g.lineTo(c,c+reach.down*R);g.lineTo(c-reach.left*R,c);g.closePath();g.stroke();g.setLineDash([]);
+}
+
+/* ---------- Customer card ---------- */
+const CC={ink:"#18212b",muted:"#5b6774",line:"#dfe4ea",accent:"#d9730d",good:"#1f8a4c",warn:"#a8690f",bad:"#c53030"};
+function cell(kind,sn){
+  if(!sn)return `<span class="na">—</span>`;
+  switch(kind){
+    case "rest":{if(!sn.rest)return na();const v=rateRest(sn.rest.max);return tag(v)+pct(sn.rest.max)+(sn.rest.max>0.05?` · leans ${lean(sn.rest.x,sn.rest.y)}`:"");}
+    case "up":case "down":case "left":case "right":{if(!sn.reach)return na();const val=sn.reach[kind];const v=rateReach(val);
+      return tag(v)+pct(val)+`<span class="mini"><i style="width:${Math.min(100,val*100)}%;background:${CC[v]}"></i></span>`;}
+    case "circ":{if(!sn.circ)return na();const v=rateCirc(sn.circ.err);return tag(v)+Math.round(100-sn.circ.err)+"%";}
+    case "rel":{if(!sn.rel)return na();const v=relRate(sn.rel);const ok=sn.rel.filter(m=>m!=null);
+      const label=v==="good"?"Snaps back":v==="warn"?"Slow":"Sticks";return tag(v)+label+(ok.length?` (${(Math.max(...ok)/1000).toFixed(2)} s)`:"");}
+  }
+}
+const na=()=>`<span class="na">Not tested</span>`;
+const tag=v=>`<i class="tag ${v}"></i>`;
+const ROWS=[["rest","At rest (off center)"],["up","Reach up"],["down","Reach down"],["left","Reach left"],["right","Reach right"],["circ","Circle accuracy"],["rel","Return to center"]];
+
+function renderCard(){
+  const now=new Date();
+  const cust=$("fCust").value.trim(),tk=$("fTicket").value.trim();
+  const model=$("fModel").value.trim()||(demo?"Demo controller":shortName(padName));
+  const nowSn={};SIDES.forEach(s=>nowSn[s.key]=snap(S[s.key]));
+  const hasBefore=!!before;
+  let html=`<div class="card-top"><div><div class="doc">Controller stick check</div><div class="biz">${BIZ}</div></div>
+    <div class="meta">${esc(model)}${cust?"<br>"+esc(cust):""}${tk?"<br>Ticket #"+esc(tk):""}<br>${now.toLocaleDateString()} ${now.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}</div></div>`;
+  SIDES.forEach(s=>{
+    const a=nowSn[s.key],b=hasBefore?before.data[s.key]:null;const w=worstOf(a);
+    html+=`<section class="cstick"><div class="cstick-head"><h5>${s.name}</h5><span class="verdict ${w||""}">${w?(hasBefore?"After repair: ":"")+verdictWord[w]:"Not tested yet"}</span></div>
+      <div class="cbody"><div class="plots">${hasBefore?`<figure><canvas id="cb${s.key}" width="236" height="236"></canvas><figcaption>Before</figcaption></figure>`:""}
+      <figure><canvas id="ca${s.key}" width="236" height="236"></canvas><figcaption>${hasBefore?"After":"Today"}</figcaption></figure></div>
+      <table class="metrics"><thead><tr><th>Check</th>${hasBefore?"<th>Before</th><th>After</th>":"<th>Result</th>"}</tr></thead><tbody>
+      ${ROWS.map(([k,l])=>`<tr><td>${l}</td>${hasBefore?`<td class="v">${cell(k,b)}</td>`:""}<td class="v">${cell(k,a)}</td></tr>`).join("")}
+      </tbody></table></div></section>`;
+  });
+  html+=`<div class="card-foot"><div><b>What good looks like:</b> at rest within 5% of center · reaches 95%+ in every direction · circle accuracy 90%+ · snaps back to center in under 0.15 s.</div>
+    <div><i class="tag good"></i>Good &nbsp; <i class="tag warn"></i>Watch &nbsp; <i class="tag bad"></i>Needs repair</div></div>`;
+  $("card").innerHTML=html;
+  SIDES.forEach(s=>{drawCardPlot($("ca"+s.key),nowSn[s.key]);if(hasBefore)drawCardPlot($("cb"+s.key),before.data[s.key]);});
+}
+function drawCardPlot(cv,sn){
+  if(!cv)return;const dpr=2,w=118;cv.width=w*dpr;cv.height=w*dpr;const g=cv.getContext("2d");g.setTransform(dpr,0,0,dpr,0,0);
+  g.fillStyle="#ffffff";g.fillRect(0,0,w,w);plotBase(g,w,CC.line,CC.good,CC.warn);const c=w/2,R=w/2-14;
+  if(sn&&sn.bins)plotBins(g,sn.bins,c,R,CC.accent);else if(sn&&sn.reach)plotReach(g,sn.reach,c,R,CC.accent);
+  if(sn&&sn.rest){const v=rateRest(sn.rest.max);g.fillStyle=CC[v];g.beginPath();g.arc(c+sn.rest.x*R,c+sn.rest.y*R,4.5,0,Math.PI*2);g.fill();}
+  g.fillStyle=CC.muted;g.font="700 8px IBM Plex Mono, monospace";g.textAlign="center";g.fillText("UP",c,9);
+}
+const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const shortName=id=>{const m=id.match(/^(.*?)\s*\(/);return (m?m[1]:id).slice(0,48)||"Controller";};
+
+/* ---------- Ticket notes ---------- */
+function summarize(sn){
+  const p=[];
+  p.push(sn.rest?`rest ${pct(sn.rest.max)} off center${sn.rest.max>0.05?" leaning "+lean(sn.rest.x,sn.rest.y):""} (${word[rateRest(sn.rest.max)]})`:"rest not tested");
+  p.push(sn.reach?`reach U ${pct(sn.reach.up)} D ${pct(sn.reach.down)} L ${pct(sn.reach.left)} R ${pct(sn.reach.right)}`:"reach not tested");
+  p.push(sn.circ?`circle ${Math.round(100-sn.circ.err)}% (${word[rateCirc(sn.circ.err)]})`:"circle not tested");
+  p.push(sn.rel?`return ${sn.rel.map(m=>m==null?"stuck":Math.round(m)+"ms").join("/")} (${word[relRate(sn.rel)]})`:"return not tested");
+  return p.join("; ");
+}
+function updateReport(){
+  const d=new Date();let txt=`Drift check ${d.toLocaleDateString()} ${d.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}\nController: ${demo?"DEMO (not a real reading)":($("fModel").value.trim()||padName)}\n`;
+  SIDES.forEach(s=>{txt+=`${s.name}: ${summarize(snap(S[s.key]))}\n`;});
+  if(before){txt="AFTER\n"+txt+"\nBEFORE\n";SIDES.forEach(s=>{txt+=`${s.name}: ${summarize(before.data[s.key])}\n`;});}
+  const ta=$("report");if(document.activeElement!==ta)ta.value=txt;
+}
+function resetAll(){SIDES.forEach(s=>{const st=S[s.key];st.rest=null;st.circ=null;st.bins=null;st.rel=[];st.reach={up:0,down:0,left:0,right:0};
+  $("restRes"+s.key).textContent="Hands off for 3 seconds";$("circRes"+s.key).textContent="Roll the stick around the edge";$("relRes"+s.key).textContent="Push to the edge, let go";});}
+$("markBefore").onclick=()=>{const data={};SIDES.forEach(s=>data[s.key]=snap(S[s.key]));before={data,at:new Date()};resetAll();
+  $("beforeHint").textContent="Before saved. Do the repair, then run the tests again.";renderCard();};
+$("clearBefore").onclick=()=>{before=null;$("beforeHint").textContent="Run the tests, save as Before, repair, run them again. The card shows both side by side.";renderCard();};
+$("copy").onclick=()=>{const ta=$("report");const done=()=>{$("copy").textContent="Copied";setTimeout(()=>$("copy").textContent="Copy notes",1500);};
+  try{navigator.clipboard.writeText(ta.value).then(done,()=>{ta.select();$("copy").textContent="Selected — press Ctrl+C";});}catch(e){ta.select();}};
+["fCust","fTicket","fModel"].forEach(id=>$(id).addEventListener("input",renderCard));
+window.addEventListener("gamepadconnected",e=>{padIndex=e.gamepad.index;});
+window.addEventListener("gamepaddisconnected",e=>{if(e.gamepad.index===padIndex)padIndex=null;});
+
+// Demo: prefill example results so the card shows a realistic state on first load
+S.L.rest={x:0.01,y:-0.12,max:0.124};S.L.reach={up:0.82,down:0.98,left:0.97,right:0.97};S.L.circ={err:11.4};S.L.rel=[120,310,null];
+S.R.rest={x:0.004,y:-0.006,max:0.009};S.R.reach={up:0.98,down:0.98,left:0.98,right:0.98};S.R.circ={err:4.2};S.R.rel=[90,85];
+renderCard();updateReport();requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
